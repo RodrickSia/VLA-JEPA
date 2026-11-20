@@ -28,6 +28,11 @@ framework:
     num_timestep_buckets: 1000
     num_inference_timesteps: 4
     num_target_vision_tokens: 32
+    world_model_attention: 
+      type: mha
+      position: pre_dit
+      num_heads: 12
+      dropout: 0.0
     diffusion_model_cfg:
       cross_attention_dim: 2048
       dropout: 0.2

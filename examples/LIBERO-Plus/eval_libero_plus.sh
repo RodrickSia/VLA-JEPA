@@ -1,14 +1,14 @@
 #!/bin/bash
 
 
-export LIBERO_HOME=/home/dataset-local/LIBERO-plus
+export LIBERO_HOME=/mnt/GuestShare_NAS/WorkingSpace/Personal/nguyenmv/ActionChunking/LIBERO-plus
 export LIBERO_CONFIG_PATH=${LIBERO_HOME}/libero
 
 export PYTHONPATH=$PYTHONPATH:${LIBERO_HOME} # let eval_libero find the LIBERO tools
 export PYTHONPATH=$(pwd):${PYTHONPATH} # let LIBERO find the websocket tools from main repo
-export sim_python=/home/dataset-local/LIBERO-plus/env/bin/python
+export sim_python=/mnt/GuestShare_NAS/WorkingSpace/Personal/nguyenmv/ActionChunking/envs/liberoplus/bin/python
 
-your_ckpt=/home/dataset-local/ginwind/huggingface/VLA-JEPA/LIBERO/checkpoints/VLA-JEPA-LIBERO.pt
+your_ckpt=/mnt/GuestShare_NAS/WorkingSpace/Personal/nguyenmv/ActionChunking/VLA-JEPA/checkpoints/VLA-JEPA/LIBERO/checkpoints/VLA-JEPA-LIBERO.pt
 
 folder_name=$(echo "$your_ckpt" | awk -F'/' '{print $(NF-2)"_"$(NF-1)"_"$NF}')
 
@@ -20,6 +20,7 @@ base_port=14082
 unnorm_key="franka"
 index=0
 with_state="true"
+gpus=(5 5 6 6 6 7 7) # one entry per perturbation server
 
 for perturbation_name in "${items[@]}"
 do
@@ -27,11 +28,11 @@ perturbation_file_name=${perturbation_name// /_}
 index=$((index+1))
 port=$((base_port+index))
 
-python ./deployment/model_server/server_policy.py \
+CUDA_VISIBLE_DEVICES=${gpus[$((index-1))]} python ./deployment/model_server/server_policy.py \
     --ckpt_path ${your_ckpt} \
     --port ${port} \
     --use_bf16 \
-    --cuda ${index} &
+    --cuda 0 &
 
 # TODO pertubations should be modified in /home/dataset-assist-0/algorithm/ginwind/LIBERO-plus/libero/libero/benchmark/__init__.py
 num_trials_per_task=1 # must be 1 for perturbation evaluation

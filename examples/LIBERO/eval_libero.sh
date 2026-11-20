@@ -1,14 +1,14 @@
 #!/bin/bash
 
 export PYTHONDONTWRITEBYTECODE=1
-export LIBERO_HOME=/home/dataset-local/LIBERO # your LIBERO code path
+export LIBERO_HOME=/mnt/GuestShare_NAS/WorkingSpace/Personal/nguyenmv/ActionChunking/LIBERO # your LIBERO code path
 export LIBERO_CONFIG_PATH=${LIBERO_HOME}/libero
 
 export PYTHONPATH=$PYTHONPATH:${LIBERO_HOME} # let eval_libero find the LIBERO tools
 export PYTHONPATH=$(pwd):${PYTHONPATH} # let LIBERO find the websocket tools from main repo
-export sim_python=/home/dataset-local/LIBERO/env/bin/python # your LIBERO conda path
+export sim_python=/home/developer/miniconda3/envs/libero/bin/python # your LIBERO conda path
 
-your_ckpt=/home/dataset-local/ginwind/huggingface/VLA-JEPA/LIBERO/checkpoints/VLA-JEPA-LIBERO.pt
+your_ckpt=/mnt/GuestShare_NAS/WorkingSpace/Personal/nguyenmv/ActionChunking/VLA-JEPA/checkpoints/VLA-JEPA/LIBERO/checkpoints/VLA-JEPA-LIBERO.pt
 folder_name=$(echo "$your_ckpt" | awk -F'/' '{print $(NF-2)"_"$(NF-1)"_"$NF}')
 
 items=("libero_10" "libero_goal" "libero_object" "libero_spatial")
@@ -16,6 +16,7 @@ host="127.0.0.1"
 base_port=15083
 unnorm_key="franka"
 index=0
+gpu=5 # all servers share this GPU
 num_trials_per_task=50
 with_state="true"
 
@@ -25,11 +26,11 @@ do
     index=$((index+1))
     port=$((base_port+index))
 
-    python ./deployment/model_server/server_policy.py \
+    CUDA_VISIBLE_DEVICES=${gpu} python ./deployment/model_server/server_policy.py \
         --ckpt_path ${your_ckpt} \
         --port ${port} \
         --use_bf16 \
-        --cuda ${index} &
+        --cuda 0 &
 
     video_out_path="results/${task_suite_name}/${folder_name}"
 

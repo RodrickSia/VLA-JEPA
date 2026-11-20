@@ -388,6 +388,13 @@ def get_action_model(config=None):
     Returns:
         FlowmatchingActionHead: Initialized FlowMatchingActionHead.
     """
+    am = config.framework.action_model
+    head_type = am.get("head_type", "groot") if hasattr(am, "get") else getattr(am, "head_type", "groot")
+    if head_type == "groot_future":  # GR00T head + world-model cross-attention (GR00T_ActionHeader_Future.py)
+        from starVLA.model.modules.action_model.GR00T_ActionHeader_Future import FlowmatchingActionHeadFuture
+        return FlowmatchingActionHeadFuture(full_config=config)
+    if head_type != "groot":
+        raise ValueError(f"unknown framework.action_model.head_type: {head_type}")
     return FlowmatchingActionHead(
         full_config=config
     )

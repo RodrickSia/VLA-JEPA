@@ -71,6 +71,10 @@ class Args:
 
     job_name: str = "test"
 
+    # resume / split a category: evaluate only tasks [start_index, end_index) of the suite (end_index -1 = to the end)
+    start_index: int = 0
+    end_index: int = -1
+
 
 def eval_libero(args: Args) -> None:
     logging.info(f"Arguments: {json.dumps(dataclasses.asdict(args), indent=4)}")
@@ -114,7 +118,8 @@ def eval_libero(args: Args) -> None:
 
     # Start evaluation
     total_episodes, total_successes = 0, 0
-    for task_id in tqdm.tqdm(range(num_tasks_in_suite)):
+    end_index = num_tasks_in_suite if args.end_index < 0 else min(args.end_index, num_tasks_in_suite)
+    for task_id in tqdm.tqdm(range(args.start_index, end_index)):
         # Get task
         task = task_suite.get_task(task_id)
 
@@ -279,7 +284,7 @@ def _get_libero_env(task, resolution, seed):
         / task.bddl_file
     )
     env_args = {
-        "bddl_file_name": task_bddl_file,
+        "bddl_file_name": str(task_bddl_file),  # LIBERO-Plus does string checks on this name
         "camera_heights": resolution,
         "camera_widths": resolution,
     }

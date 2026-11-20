@@ -30,6 +30,8 @@ class M1Inference:
         adaptive_ensemble_alpha = 0.1,
         host="0.0.0.0",
         port=10095,
+        delay: int = 0,                          # d: inference latency in control steps
+        execution_horizon: Optional[int] = None,  # s: new actions executed per chunk (None = full chunk)
     ) -> None:
         
         # build client to connect server policy
@@ -60,6 +62,18 @@ class M1Inference:
 
         self.action_norm_stats = self.get_action_stats(self.unnorm_key, policy_ckpt_path=policy_ckpt_path)
         self.action_chunk_size = self.get_action_chunk_size(policy_ckpt_path=policy_ckpt_path)
+
+        # async chunking: d = 0 and s = chunk size reproduces the original synchronous behaviour
+        self.delay = int(delay)
+        self.execution_horizon = int(execution_horizon) if execution_horizon else self.action_chunk_size
+        assert self.delay >= 0 and self.execution_horizon >= 1
+        assert self.execution_horizon + self.delay <= self.action_chunk_size, (
+            f"execution_horizon ({self.execution_horizon}) + delay ({self.delay}) must be <= chunk size ({self.action_chunk_size})")
+        # only one request can be in flight: the next one starts when d actions remain, so it needs d <= s
+        assert self.delay <= self.execution_horizon, (
+            f"delay ({self.delay}) must be <= execution_horizon ({self.execution_horizon}): with d > s two requests would overlap")
+        self.plan = deque()    # NORMALIZED actions still to execute
+        self.pending = None    # chunk requested but not yet "arrived"
         
 
     def _add_image_to_history(self, image: np.ndarray) -> None:
@@ -78,10 +92,13 @@ class M1Inference:
         self.sticky_gripper_action = 0.0
         self.previous_gripper_action = None
 
+        self.plan = deque()
+        self.pending = None
+
 
     def step(
         self, 
-        images, 
+        images,
         task_description: Optional[str] = None,
         state: Optional[np.ndarray] = None,
         step: int = 0,
@@ -113,16 +130,26 @@ class M1Inference:
         if state is not None:
             vla_input["state"] = [state]  # add batch dim
         
-        action_chunk_size = self.action_chunk_size
-        if step % action_chunk_size == 0:
-            response = self.client.infer(vla_input)
-            # unnormalize the action
-            # import ipdb; ipdb.set_trace()
-            normalized_actions = response["data"]["normalized_actions"] # B, chunk, D        
-            normalized_actions = normalized_actions[0]    
-            self.raw_actions = self.unnormalize_actions(normalized_actions=normalized_actions, action_norm_stats=self.action_norm_stats)
-        
-        raw_actions = self.raw_actions[step % action_chunk_size][None]    
+        d, s = self.delay, self.execution_horizon
+        if not self.plan:
+            # episode start (or, with d = 0, the previous chunk is used up): blocking request
+            normalized_actions = self.client.infer(vla_input)["data"]["normalized_actions"][0]  # [chunk, D]
+            self.plan.extend(normalized_actions[: s + d])
+        elif d > 0 and self.pending is None and len(self.plan) == d:
+            # d actions left: request now from the CURRENT obs; they execute while the model "thinks"
+            # (true async chunking, once the model supports it: vla_input["prefix_actions"] = [np.stack(self.plan)])
+            self.pending = self.client.infer(vla_input)["data"]["normalized_actions"][0]
+
+        normalized_action = self.plan.popleft()
+
+        if not self.plan and self.pending is not None:
+            # d steps have passed: the chunk "arrives"; rows 0..d-1 overlap the executed leftovers
+            self.plan.extend(self.pending[d : d + s])
+            self.pending = None
+
+        raw_actions = self.unnormalize_actions(
+            normalized_actions=np.asarray(normalized_action)[None], action_norm_stats=self.action_norm_stats
+        )  # [1, D]
 
         raw_action = {
             "world_vector": np.array(raw_actions[0, :3]),
@@ -132,6 +159,11 @@ class M1Inference:
 
         return {"raw_action": raw_action, "raw_actions": raw_actions[:7]}
 
+
+    
+
+
+    
     @staticmethod
     def unnormalize_actions(normalized_actions: np.ndarray, action_norm_stats: Dict[str, np.ndarray]) -> np.ndarray:
         mask = action_norm_stats.get("mask", np.ones_like(action_norm_stats["min"], dtype=bool))

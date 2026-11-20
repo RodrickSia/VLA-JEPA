@@ -1,0 +1,43 @@
+# --- python / editor / tooling caches
+__pycache__/
+*.pyc
+*.egg-info/
+.vscode/
+.claude/
+wandb/
+
+# --- local caches and scratch dirs
+/.hf_cache/
+/.install_cache/
+/.train_tmp/
+
+# --- large artifacts and experiment outputs (not source)
+/checkpoints/
+/data/
+/runs/
+/results/
+/results_async/
+/results_async_plus/
+/results_future/
+/results_future_plus/
+/logs/*
+!/logs/README.md
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.hdf5
+
+# --- backup copies / patch leftovers
+*.bak
+*.bak_*
+*.orig
+*.rej
+
+# --- run-specific job files of the live async LIBERO-Plus run (not source)
+/async_resume2_jobs.txt
+/logs_*.txt
+/supervise_async_plus.py
+/run_async_servers.sh
+/run_resume2_async_plus.sh
+/scripts/MOVED_FILES.txt

@@ -60,6 +60,7 @@ class VLA_JEPA(baseframework):
         self.config = config
         self.qwen_vl_interface = get_vlm_model(config=self.config)
         embodied_action_token = self.config.framework.vj2_model.get("embodied_action_token", "<|embodied_action|>")
+        # Adding special learnable tokens ids
         action_tokens, self.action_token_ids, self.embodied_action_token_id = self.expand_tokenizer(
             tokenizer=self.qwen_vl_interface.processor.tokenizer,
             special_action_token=self.config.framework.vj2_model.special_action_token,

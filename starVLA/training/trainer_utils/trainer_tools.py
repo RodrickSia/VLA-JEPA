@@ -250,9 +250,16 @@ class TrainerUtils:
                     print(f"❌ cannot find module path: {path}")
         else:  # full load
             try:
-                model.load_state_dict(checkpoint, strict=True)
+                missing, unexpected = model.load_state_dict(checkpoint, strict=False)
+                # modules that an older checkpoint cannot contain; they keep their own (zero-gated) init
+                new_prefixes = ("action_model.world_model_attention.",)
+                bad_missing = [k for k in missing if not k.startswith(new_prefixes)]
+                if bad_missing or unexpected:
+                    raise RuntimeError(f"state_dict mismatch: missing={bad_missing[:20]} unexpected={list(unexpected)[:20]}")
                 if dist.get_rank() == 0:
                     print("✅ loaded <full_model> model parameters")
+                    if missing:
+                        print(f"ℹ️  {len(missing)} new parameters not in the checkpoint, freshly initialised: action_model.world_model_attention.*")
                 loaded_modules = ["<full_model>"]
             except Exception as e:
                 raise RuntimeError(f"❌ loading full model failed: {e}")
