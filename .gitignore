@@ -41,3 +41,8 @@ wandb/
 /run_async_servers.sh
 /run_resume2_async_plus.sh
 /scripts/MOVED_FILES.txt
+
+# --- one-off eval repair scripts and simulator logs (not source)
+/MUJOCO_LOG.TXT
+/scripts/eval/fix_server_19204.sh
+/scripts/eval/restart_server_threads.sh
