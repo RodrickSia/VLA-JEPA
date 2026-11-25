@@ -43,6 +43,7 @@ from starVLA.training.trainer_utils.trainer_tools import normalize_dotlist_args
 from starVLA.model.framework import build_framework
 from starVLA.training.trainer_utils.trainer_tools import TrainerUtils
 from starVLA.training.trainer_utils.trainer_tools import build_param_lr_groups
+from starVLA.training.trainer_utils.trainer_tools import params_outside_trainable_modules
 
 deepspeed_plugin = DeepSpeedPlugin()
 accelerator = Accelerator(
@@ -171,6 +172,14 @@ class VLATrainer(TrainerUtils):
             else None
         )
         self.model = self.freeze_backbones(self.model, freeze_modules=freeze_modules)
+        # trainable_modules: train only these module paths, freeze everything else
+        outside = params_outside_trainable_modules(self.model, self.config)
+        if outside:
+            for p in self.model.parameters():
+                if id(p) in outside:
+                    p.requires_grad = False
+            if dist.get_rank() == 0:
+                print(f"🔒 training only: {self.config.trainer.trainable_modules}")
 
         #  print model trainable parameters:
         self.print_trainable_parameters(self.model)
@@ -187,12 +196,27 @@ class VLATrainer(TrainerUtils):
         #self._init_wandb()
         self._init_checkpointing()
 
+    def _grad_accum_steps(self):
+        """micro-batches per optimizer update (DeepSpeed json value when DeepSpeed is used)"""
+        engine = getattr(self, "model", None)
+        if engine is not None and hasattr(engine, "gradient_accumulation_steps") and callable(engine.gradient_accumulation_steps):
+            return engine.gradient_accumulation_steps()
+        return self.accelerator.gradient_accumulation_steps
+
+    def _is_update_step(self):
+        """True right after a micro-batch that ended with a real optimizer update"""
+        before = getattr(self, "_ds_steps_before", None)
+        after = getattr(self.model, "global_steps", None)
+        if before is None or after is None:  # not DeepSpeed
+            return self.accelerator.sync_gradients
+        return after != before
+
     def _calculate_total_batch_size(self):
         """calculate global batch size"""
         return (
             self.config.datasets.vla_data.per_device_batch_size
             * self.accelerator.num_processes
-            * self.accelerator.gradient_accumulation_steps
+            * self._grad_accum_steps()
         )
 
     def _init_wandb(self):
@@ -250,7 +274,7 @@ class VLATrainer(TrainerUtils):
                 metrics["learning_rate"] = self.lr_scheduler.get_last_lr()[0]
 
                 # add epoch info
-                metrics["epoch"] = round(self.completed_steps / len(self.vla_train_dataloader), 2)
+                metrics["epoch"] = round(self.completed_steps * self._grad_accum_steps() / len(self.vla_train_dataloader), 3)
 
                 # record to W&B
                 #wandb.log(metrics, step=self.completed_steps)
@@ -360,8 +384,9 @@ class VLATrainer(TrainerUtils):
             step_metrics = self._train_step(batch_vla)
             t_end_model = time.perf_counter()
 
-            # update progress
-            if self.accelerator.sync_gradients:
+            # update progress: one step = one real optimizer update (DeepSpeed accumulates micro-batches itself;
+            # accelerate's own accumulation cannot be used, its no_sync() is incompatible with ZeRO-2)
+            if self._is_update_step():
                 progress_bar.update(1)
                 self.completed_steps += 1
             
@@ -393,18 +418,21 @@ class VLATrainer(TrainerUtils):
                         }
                     )
 
-            # evaluate model
-            if self.completed_steps % self.config.trainer.eval_interval == 0:
-                step_metrics = self.eval_action_model(step_metrics)
+            # eval / log / save only right after a real optimizer update; otherwise they would repeat
+            # for every micro-batch of the accumulation window (completed_steps does not change in between)
+            if self._is_update_step():
+                # evaluate model
+                if self.completed_steps % self.config.trainer.eval_interval == 0:
+                    step_metrics = self.eval_action_model(step_metrics)
 
-            # record metrics
-            step_metrics["data_time"] = t_end_data - t_start_data
-            step_metrics["model_time"] = t_end_model - t_start_model
-            self._log_metrics(step_metrics)
+                # record metrics
+                step_metrics["data_time"] = t_end_data - t_start_data
+                step_metrics["model_time"] = t_end_model - t_start_model
+                self._log_metrics(step_metrics)
 
-            # save checkpoint
-            if self.completed_steps % self.config.trainer.save_interval == 0 and self.completed_steps > 0:
-                self._save_checkpoint()
+                # save checkpoint
+                if self.completed_steps % self.config.trainer.save_interval == 0 and self.completed_steps > 0:
+                    self._save_checkpoint()
 
             # check termination condition
             if self.completed_steps >= self.config.trainer.max_train_steps:
@@ -470,11 +498,12 @@ class VLATrainer(TrainerUtils):
             logger.info("***** Training Configuration *****")
             logger.info(f"  Total optimization steps = {self.config.trainer.max_train_steps}")
             logger.info(f"  Per device batch size = {self.config.datasets.vla_data.per_device_batch_size}")
-            logger.info(f"  Gradient accumulation steps = {self.config.trainer.gradient_accumulation_steps}")
-            logger.info(f"  Total batch size = {self.total_batch_size}")
+            logger.info(f"  Gradient accumulation steps = {self._grad_accum_steps()}")
+            logger.info(f"  Total batch size = {self._calculate_total_batch_size()}")
 
     def _train_step(self, batch_vla, batch_vlm=None):
         """execute single training step"""
+        self._ds_steps_before = getattr(self.model, "global_steps", None)
         with self.accelerator.accumulate(self.model):
             self.optimizer.zero_grad()
             # VLA task forward propagation
@@ -490,9 +519,11 @@ class VLATrainer(TrainerUtils):
             if self.config.trainer.gradient_clipping is not None:
                 self.accelerator.clip_grad_norm_(self.model.parameters(), self.config.trainer.gradient_clipping)
 
-            # optimizer step
+            # optimizer step (DeepSpeed only really steps at the accumulation boundary)
             self.optimizer.step()
-            self.lr_scheduler.step()
+            # the scheduler is not wrapped by accelerate: step it once per real optimizer update, not per micro-batch
+            if self._is_update_step():
+                self.lr_scheduler.step()
             
             result_dict = {k: v.item() for k, v in output_dict.items()}
 

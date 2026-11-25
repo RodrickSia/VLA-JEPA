@@ -48,6 +48,23 @@ def normalize_dotlist_args(args):
     return normalized
 
 
+def params_outside_trainable_modules(model, cfg):
+    """ids of all params NOT under cfg.trainer.trainable_modules (comma-separated module paths).
+    Empty set when trainable_modules is unset, i.e. nothing extra is frozen."""
+    spec = cfg.trainer.get("trainable_modules", "") if hasattr(cfg.trainer, "get") else getattr(cfg.trainer, "trainable_modules", "")
+    if not isinstance(spec, str) or not spec.strip():
+        return set()
+    keep = set()
+    for path in [p.strip() for p in spec.split(",") if p.strip()]:
+        module = model
+        for attr in path.split("."):
+            module = getattr(module, attr)  # AttributeError on a wrong path is intended: fail loudly
+        keep.update(id(p) for p in module.parameters())
+    if not keep:
+        raise ValueError(f"trainable_modules={spec!r} matched no parameters")
+    return {id(p) for p in model.parameters() if id(p) not in keep}
+
+
 def build_param_lr_groups(model, cfg):
     """
     build multiple param groups based on cfg.trainer.learning_rate.
@@ -82,6 +99,9 @@ def build_param_lr_groups(model, cfg):
         except AttributeError:
             print(f"⚠️ freeze module path does not exist: {freeze_path}")
             continue
+
+    # trainable_modules: everything outside those modules is frozen as well
+    frozen_params.update(params_outside_trainable_modules(model, cfg))
 
     for module_name, lr in lr_cfg.items():
         if module_name == "base":

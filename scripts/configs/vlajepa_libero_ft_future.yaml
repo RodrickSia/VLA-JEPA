@@ -70,21 +70,21 @@ datasets:
     CoT_prompt: Your task is {instruction}. Infer the temporal dynamics from frames
       {actions} and produce the corresponding policy actions {e_actions}.
     resolution_size: 224
-    per_device_batch_size: 8
+    per_device_batch_size: 2           # paper A.2: 32/GPU x 8 GPUs = 256. Here 2/GPU x 2 GPUs (6,7) x 64 accum (DeepSpeed acc64 config) = 256
     load_all_data_for_training: true
     action_horizon: 7
     with_state: true
 trainer:
   epochs: 100
-  max_train_steps: 120000
-  num_warmup_steps: 20000
-  save_interval: 10000
+  max_train_steps: 3200               # real optimizer updates of 256 samples = ~3 passes over LIBERO (273K frames). Paper A.2: 30K (~28 passes, ~75 days here)
+  num_warmup_steps: 530               # paper: 'linear warmup', length not stated -> repo ratio 20K/120K = 1/6
+  save_interval: 1070                 # ~one pass over LIBERO
   eval_interval: 100
   learning_rate:
     base: 3.0e-05
-    qwen_vl_interface: 1.0e-05
-    action_model: 0.0001
-    vj_predictor: 0.0005
+    qwen_vl_interface: 1.0e-05         # paper A.2: 1e-5 for the VLM
+    action_model: 0.0001               # paper A.2: 1e-4 for the action head
+    vj_predictor: 0.0005               # authors' repo config (paper A.2 says 1e-5 for the latent world model; kept repo value on purpose)
   lr_scheduler_type: cosine_with_min_lr
   scheduler_specific_kwargs:
     min_lr: 1.0e-05

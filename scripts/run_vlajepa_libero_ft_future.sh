@@ -5,8 +5,7 @@ set -euo pipefail
 REPO_ROOT=/mnt/GuestShare_NAS/WorkingSpace/Personal/nguyenmv/ActionChunking/VLA-JEPA
 RUNTIME_ENV=/home/developer/miniconda3/envs/VLA_JEPA
 ACCELERATE_BIN=${RUNTIME_ENV}/bin/accelerate
-CONFIG_FILE=${REPO_ROOT}/scripts/configs/vlajepa_libero_ft_future.yaml
-DS_CONFIG=${REPO_ROOT}/starVLA/config/deepseeds/deepspeed_zero2_offload_3gpu.yaml
+CONFIG_FILE=${CONFIG_FILE:-${REPO_ROOT}/scripts/configs/vlajepa_libero_ft_future.yaml}
 RUN_ROOT=${REPO_ROOT}/runs
 RUN_ID=${RUN_ID:-vlajepa_libero_ft_future}
 RUN_DIR=${RUN_ROOT}/${RUN_ID}
@@ -26,7 +25,17 @@ export CUDA_LIBRARY_PATHS="${CUDA_NVIDIA_SITE_PACKAGES}/cuda_runtime/lib:${CUDA_
 export LD_LIBRARY_PATH="${CUDA_LIBRARY_PATHS}:${CUDA_HOME}/lib/python3.10/site-packages/torch/lib:${LD_LIBRARY_PATH:-}"
 export TMPDIR=${REPO_ROOT}/.train_tmp
 export HF_HOME=${REPO_ROOT}/.hf_cache XDG_CACHE_HOME=${REPO_ROOT}/.hf_cache/xdg TRITON_CACHE_DIR=${REPO_ROOT}/.train_tmp/triton TORCH_EXTENSIONS_DIR=${REPO_ROOT}/.train_tmp/torch_extensions
-export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-5,6,7}   # only GPUs 5-7
+export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-6,7}   # GPUs to train on (was 5,6,7)
+NUM_GPUS=$(echo "${CUDA_VISIBLE_DEVICES}" | tr ',' '\n' | grep -c .)
+# global batch = 2/GPU x GPUs x accumulation: 1 GPU x 128 = 256 | 2 GPUs x 64 = 256 | 3 GPUs x 43 = 258
+case "${NUM_GPUS}" in
+  1) DEFAULT_DS=deepspeed_zero2_offload_1gpu_acc128.yaml ;;
+  2) DEFAULT_DS=deepspeed_zero2_offload_2gpu_acc64.yaml ;;
+  3) DEFAULT_DS=deepspeed_zero2_offload_3gpu_acc43.yaml ;;
+  *) echo "no DeepSpeed config for ${NUM_GPUS} GPUs; set DS_CONFIG" >&2; exit 1 ;;
+esac
+DS_CONFIG=${DS_CONFIG:-${REPO_ROOT}/starVLA/config/deepseeds/${DEFAULT_DS}}
+# accumulation comes from the DeepSpeed json only; train_starvla.py counts a step when DeepSpeed really updates
 export TOKENIZERS_PARALLELISM=false
 export WANDB_MODE=disabled
 export NCCL_IB_DISABLE=1
@@ -44,10 +53,16 @@ echo "  repo: ${REPO_ROOT}"
 echo "  config: ${CONFIG_FILE}"
 echo "  run_dir: ${RUN_DIR}"
 echo "  log: ${LOG_FILE}"
+echo "  gpus: ${CUDA_VISIBLE_DEVICES} (${NUM_GPUS})  ds_config: ${DS_CONFIG}"
+
+# rendezvous port: a free one picked here (29500 can be held by a dying run; port 0 is NOT supported by the DeepSpeed launcher)
+MAIN_PORT=${MAIN_PORT:-$(python3 -c "import socket; s=socket.socket(); s.bind(('127.0.0.1', 0)); print(s.getsockname()[1]); s.close()")}
+echo "  main_process_port: ${MAIN_PORT}"
 
 "${ACCELERATE_BIN}" launch \
   --config_file "${DS_CONFIG}" \
-  --num_processes 3 \
+  --num_processes ${NUM_GPUS} \
+  --main_process_port ${MAIN_PORT} \
   "${REPO_ROOT}/starVLA/training/train_starvla.py" \
   --config_yaml "${CONFIG_FILE}" \
   --run_id "${RUN_ID}" "$@"
