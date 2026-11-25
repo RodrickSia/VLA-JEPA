@@ -133,12 +133,12 @@ class M1Inference:
         d, s = self.delay, self.execution_horizon
         if not self.plan:
             # episode start (or, with d = 0, the previous chunk is used up): blocking request
-            normalized_actions = self.client.infer(vla_input)["data"]["normalized_actions"][0]  # [chunk, D]
+            normalized_actions = self._checked(self.client.infer(vla_input))  # [chunk, D]
             self.plan.extend(normalized_actions[: s + d])
         elif d > 0 and self.pending is None and len(self.plan) == d:
             # d actions left: request now from the CURRENT obs; they execute while the model "thinks"
             # (true async chunking, once the model supports it: vla_input["prefix_actions"] = [np.stack(self.plan)])
-            self.pending = self.client.infer(vla_input)["data"]["normalized_actions"][0]
+            self.pending = self._checked(self.client.infer(vla_input))
 
         normalized_action = self.plan.popleft()
 
@@ -195,6 +195,16 @@ class M1Inference:
         # import ipdb; ipdb.set_trace()
         return model_config['framework']['action_model']['future_action_window_size'] + 1
 
+
+    def _checked(self, response):
+        """Return the action chunk; stop the episode loudly on a server error or non-finite actions
+        (a broken server returned NaN for hours on 2026-11-23 and the sim silently froze the robot)."""
+        if "data" not in response:
+            raise RuntimeError(f"model server error on port {self.client._uri if hasattr(self.client, '_uri') else '?'}: {str(response)[:300]}")
+        actions = np.asarray(response["data"]["normalized_actions"][0])
+        if not np.all(np.isfinite(actions)):
+            raise RuntimeError(f"model server returned non-finite actions (NaN/inf): {np.isnan(actions).sum()} NaN of {actions.size}")
+        return actions
 
     def _resize_image(self, image: np.ndarray) -> np.ndarray:
         image = cv.resize(image, tuple(self.image_size), interpolation=cv.INTER_AREA)
