@@ -301,7 +301,10 @@ class VLA_JEPA_Future(baseframework):
                 wm_kwargs["wm_states"] = wm_for_head.repeat(repeated_diffusion_steps, 1, 1, 1, 1)
             action_loss = self.action_model(embodied_action_repeated, actions_target_repeated, state_repeated, **wm_kwargs)  # (B, chunk_len, action_dim)
 
-        return {"action_loss": action_loss, "wm_loss": teacher_forcing_wm_loss * 0.1}
+        # weight of the world-model loss: trainer.loss_scale.wm in the yaml (default 0.1 = the old hard-coded value; 0 = off)
+        loss_scale = self.config.trainer.get("loss_scale", None) if (self.config and self.config.trainer) else None
+        wm_weight = float(loss_scale.get("wm", 0.1)) if loss_scale is not None else 0.1
+        return {"action_loss": action_loss, "wm_loss": teacher_forcing_wm_loss * wm_weight}
 
     @torch.inference_mode()
     def predict_action(

@@ -1,6 +1,9 @@
-# Finetune from the released LIBERO checkpoint, training only the new world-model cross-attention blocks, 2 epochs.
+# Finetune from the released LIBERO checkpoint, 2 epochs. Setup of this experiment:
+#   - WHOLE action head trainable (trainable_modules: action_model); Qwen, V-JEPA encoder and WM predictor frozen
+#   - world-model loss OFF (loss_scale.wm: 0.0); robot (LIBERO) data only, no human video
+#   - world-model cross-attention blocks WITHOUT tanh gates (gate: none): active from step 0
 # Derived from vlajepa_libero_ft_future.yaml (paper settings: batch 256, LRs).
-run_id: vlajepa_libero_ft_future_from_libero
+run_id: vlajepa_libero_ft_future_headft_nogate   # new name: do not reuse ..._from_libero (its steps_1063 checkpoint is used by the ep2 config)
 run_root_dir: /mnt/GuestShare_NAS/WorkingSpace/Personal/nguyenmv/ActionChunking/VLA-JEPA/runs
 seed: 42
 trackers:
@@ -40,7 +43,7 @@ framework:
       norm_type: ada_norm          # timestep-conditioned pre-norm like the DiT blocks | layer_norm | none
       use_ffn: true
       ffn_ratio: 4                 # FFN hidden = 4 x query dim
-      gate: tanh_zero              # residual gates start at 0: exact no-op on the pretrained head at step 0
+      gate: none                   # NO gates: block outputs are added in full from step 0 (not a no-op on the pretrained head). tanh_zero = old zero-start gates
       pool_size: 8                 # each WM step's 16x16 patch grid -> 8x8: 3 steps x 64 = 192 K/V tokens
       detach_wm: true              # action loss does not backprop into the world model
       # kdim: set by VLA_JEPA_Future.__init__ = V-JEPA hidden size x 2 views (2048); output dim = query dim (residual)
@@ -91,10 +94,11 @@ trainer:
   scheduler_specific_kwargs:
     min_lr: 1.0e-05
   freeze_modules: ''
-  trainable_modules: action_model.world_model_attention   # train ONLY the new WM cross-attention blocks; rest frozen
+  trainable_modules: action_model   # train the WHOLE action head (DiT, encoders/decoder, new WM cross-attention blocks); Qwen, V-JEPA encoder and WM predictor stay frozen
   loss_scale:
     vla: 1.0
     vlm: 0.1
+    wm: 0.0     # weight of the world-model loss wm_loss (code default 0.1 if this key is missing); 0 = off
   max_grad_norm: 1.0
   warmup_ratio: 0.1
   weight_decay: 0.0
